@@ -1,0 +1,16 @@
+[package]
+name = "doit"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+sha-crypt = { version = "0.6", features = ["alloc", "password-hash"] }
+yescrypt = { version = "0.1", features = ["password-hash"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+users = "0.11"
+libc = "0.2"
+log = "0.4"
+syslog = "7"
