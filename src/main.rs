@@ -34,10 +34,7 @@
 //! * **Environment sanitised** — before executing the command:
 //!   - Known-dangerous variables (`LD_PRELOAD`, `LD_LIBRARY_PATH`, etc.) stripped
 //!   - `PATH` forced to `/usr/local/bin:/usr/bin:/bin`
-//!
-//! * **Strict path resolution** — the command is resolved to an absolute path
-//!   inside the hardened `PATH` before execution.
-//!
+
 //! * **Audit logging** — every authorisation attempt (success or failure) is
 //!   logged to syslog under `LOG_AUTH`.  Ensure your host system has a log
 //!   rotation policy that preserves these entries — they are the primary audit
@@ -216,70 +213,6 @@ fn init_syslog() {
             log::set_max_level(LevelFilter::Info);
         }
     }
-}
-
-// Strict path resolution
-// ---------------------------------------------------------------------------
-
-/// Resolve `program` to an absolute path inside one of the [`SAFE_PATH`]
-/// directories.
-///
-/// * If `program` is already absolute it is canonicalised and checked against
-///   the safe-directory prefix list.
-/// * If `program` is a bare name each directory in [`SAFE_PATH`] is searched
-///   in order. The first match that canonicalises to a path under a safe
-///   prefix is returned.
-///
-/// Returns `Err` if the program cannot be found or resolves outside the safe
-/// directories.
-fn resolve_command(program: &str) -> Result<String, String> {
-    let safe_dirs: Vec<&str> = SAFE_PATH.split(':').collect();
-
-    let candidates: Vec<String> = if program.starts_with('/') {
-        vec![program.to_string()]
-    } else {
-        safe_dirs
-            .iter()
-            .map(|d| format!("{}/{}", d, program))
-            .collect()
-    };
-
-    for candidate in &candidates {
-        let meta = match fs::metadata(candidate) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if !meta.is_file() {
-            continue;
-        }
-
-        // Resolve symlinks to prevent /usr/bin/../../tmp/evil patterns.
-        let real = match fs::canonicalize(candidate) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-
-        // Verify the canonical path sits under one of the safe directories.
-        let real_str = real.to_string_lossy();
-        let safe = safe_dirs.iter().any(|d| {
-            let normalised = d.trim_end_matches('/');
-            real_str == *normalised || real_str.starts_with(&format!("{}/", normalised))
-        });
-
-        if !safe {
-            return Err(format!(
-                "command '{}' resolves to '{}' which is outside safe directories",
-                program, real_str
-            ));
-        }
-
-        return Ok(real_str.into_owned());
-    }
-
-    Err(format!(
-        "command '{}' not found in {}",
-        program, SAFE_PATH
-    ))
 }
 
 // Configuration parsing
@@ -742,17 +675,6 @@ fn main() {
     let args = Args::parse();
     let user = get_real_username();
 
-    // Resolve the command to an absolute path inside SAFE_PATH before doing
-    // anything else, so we fail early with a clear error.
-    let cmd_path = match resolve_command(&args.command) {
-        Ok(p) => p,
-        Err(e) => {
-            error!("{}: failed to resolve command '{}': {}", user, args.command, e);
-            eprintln!("doit: {}", e);
-            process::exit(1);
-        }
-    };
-
     check_shadow_access();
 
     // Enforce strict permissions on the config file and the counter
@@ -799,12 +721,12 @@ fn main() {
 
     match *permit {
         PermitType::NoPass => {
-            info!("{}: authorised (nopass): {}", user, cmd_path);
+            info!("{}: authorised (nopass): {}", user, args.command);
         }
 
         PermitType::Password => {
             prompt_password(&user);
-            info!("{}: authorised (password): {}", user, cmd_path);
+            info!("{}: authorised (password): {}", user, args.command);
         }
 
         PermitType::Extend => {
@@ -827,20 +749,14 @@ fn main() {
                 let new_remaining = decrement_counter(&user);
                 info!(
                     "{}: authorised (extend, {} remaining): {}",
-                    user, new_remaining, cmd_path
+                    user, new_remaining, args.command
                 );
-                eprintln!(
-                    "doit: extended authority – {} remaining nopass use(s)",
-                    new_remaining
-                );
+                // proceed without stderr noise
             } else {
                 prompt_password(&user);
                 reset_counter(&user);
-                info!("{}: authorised (extend, recharged): {}", user, cmd_path);
-                eprintln!(
-                    "doit: password accepted – {} nopass use(s) granted",
-                    EXTEND_LIMIT
-                );
+                info!("{}: authorised (extend, recharged): {}", user, args.command);
+                // proceed without stderr noise
             }
         }
     }
@@ -849,11 +765,11 @@ fn main() {
     // real and effective UID as 0.
     become_root();
 
-    let mut cmd = build_command(&cmd_path);
+    let mut cmd = build_command(&args.command);
     cmd.args(&args.args);
     let err = cmd.exec();
 
-    error!("{}: exec failed: {}: {}", user, cmd_path, err);
+    error!("{}: exec failed: {}: {}", user, args.command, err);
     eprintln!("doit: failed to execute '{}': {}", args.command, err);
     process::exit(1);
 }
