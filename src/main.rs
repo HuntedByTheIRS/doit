@@ -707,6 +707,32 @@ fn build_command(program: &str) -> Command {
     cmd
 }
 
+/// Drop the caller identity and fully switch to root.
+///
+/// When the binary is setuid-root the effective UID is already 0, but the
+/// real UID is still the caller.  Many commands (NFS, stat, etc.) check the
+/// real UID and will not behave as root if it does not match.  This function
+/// calls `setresuid(0, 0, 0)` so that real, effective, and saved UIDs all
+/// become root, then verifies the switch took effect.
+fn become_root() {
+    let ret = unsafe { libc::setresuid(0, 0, 0) };
+    if ret != 0 {
+        let err = io::Error::last_os_error();
+        error!("failed to switch to root UID: {}", err);
+        eprintln!("doit: failed to switch to root UID: {}", err);
+        eprintln!("doit: the doit binary must be installed as setuid root:");
+        eprintln!("doit:   sudo chown root:root /path/to/doit");
+        eprintln!("doit:   sudo chmod u+s /path/to/doit");
+        process::exit(1);
+    }
+
+    if unsafe { libc::getuid() } != 0 || unsafe { libc::geteuid() } != 0 {
+        error!("failed to verify root UID after setresuid");
+        eprintln!("doit: failed to verify root UID after privilege switch");
+        process::exit(1);
+    }
+}
+
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -818,6 +844,10 @@ fn main() {
             }
         }
     }
+
+    // Fully switch to root before executing, so the command sees both
+    // real and effective UID as 0.
+    become_root();
 
     let mut cmd = build_command(&cmd_path);
     cmd.args(&args.args);
