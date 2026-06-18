@@ -45,13 +45,15 @@ cargo build --release
 ### 2. Install the binary
 
 ```sh
-sudo -i       # If you use sudo
-# -- or --
-doas -s       # If you use doas
+# Using sudo:
+sudo cp target/release/doit /usr/local/bin/doit
+sudo chown root:root /usr/local/bin/doit
+sudo chmod u+s /usr/local/bin/doit
 
-cp target/release/doit /usr/local/bin/doit
-chown root:root /usr/local/bin/doit
-chmod u+s /usr/local/bin/doit
+# Or using doas:
+# doas cp target/release/doit /usr/local/bin/doit
+# doas chown root:root /usr/local/bin/doit
+# doas chmod u+s /usr/local/bin/doit
 ```
 
 The `u+s` (setuid) bit is required so the binary runs as root regardless of
