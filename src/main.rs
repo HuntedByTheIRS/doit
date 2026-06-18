@@ -47,7 +47,7 @@ use sha_crypt::{PasswordHash, PasswordVerifier, ShaCrypt};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, Read, Seek, Write};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -676,6 +676,34 @@ fn main() {
     let user = get_real_username();
 
     check_shadow_access();
+
+    // If the config file does not exist, create it with a default entry
+    // for the current user.  This matches the behaviour of doas, which
+    // prompts the admin during first use.
+    if !Path::new(CONFIG_PATH).exists() {
+        let default_entry = format!("{} permit\n", user);
+        match fs::write(CONFIG_PATH, &default_entry) {
+            Ok(_) => {
+                // Lock down permissions immediately.
+                let _ = fs::set_permissions(CONFIG_PATH, std::fs::Permissions::from_mode(0o600));
+                info!("created {} with default entry for '{}'", CONFIG_PATH, user);
+                eprintln!(
+                    "doit: created {} with entry '{} permit'",
+                    CONFIG_PATH, user
+                );
+            }
+            Err(e) => {
+                error!("failed to create {}: {}", CONFIG_PATH, e);
+                eprintln!(
+                    "doit: failed to create config '{}': {}",
+                    CONFIG_PATH, e
+                );
+                eprintln!("doit: create it manually with:");
+                eprintln!("doit:   echo '{} permit' | sudo tee {} && sudo chmod 600 {}", user, CONFIG_PATH, CONFIG_PATH);
+                process::exit(1);
+            }
+        }
+    }
 
     // Enforce strict permissions on the config file and the counter
     // directory before trusting any data from them.

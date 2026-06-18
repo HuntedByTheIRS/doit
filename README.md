@@ -5,7 +5,7 @@ as root, controlled by `/etc/doit.conf`.
 
 ## Configuration
 
-Edit `/etc/doit.conf` with lines of the form:
+`/etc/doit.conf` uses the same syntax as `doas.conf`:
 
 ```
 <user> permit [nopass|extend]
@@ -45,11 +45,13 @@ cargo build --release
 ### 2. Install the binary
 
 ```sh
-sudo -i || doas bash # Replace depending on your setup.
+sudo -i       # If you use sudo
+# -- or --
+doas -s       # If you use doas
+
 cp target/release/doit /usr/local/bin/doit
 chown root:root /usr/local/bin/doit
 chmod u+s /usr/local/bin/doit
-chmod 600 /etc/doit.conf
 ```
 
 The `u+s` (setuid) bit is required so the binary runs as root regardless of
@@ -57,14 +59,22 @@ who invokes it.
 
 ### 3. Create the configuration file
 
+**If you skip this step, `doit` will create `/etc/doit.conf` automatically on
+first run** with an entry for your user (`<user> permit`).  The file will be
+locked down to mode `600`.
+
+To create it manually ahead of time:
+
 ```sh
-sudo mkdir -p /etc
-# Edit the file to add your rules
 sudo tee /etc/doit.conf <<'EOF'
 alice permit nopass
 bob permit extend
 EOF
+sudo chmod 600 /etc/doit.conf
 ```
+
+The config file **must** be mode `600` (owner read/write only).  `doit` enforces
+this at startup and will refuse to run if the permissions are too permissive.
 
 ### 4. (For `extend` users) Create the counter directory
 
@@ -98,24 +108,30 @@ doit pacman -Syu
 
 1. `doit` is a setuid-root binary. When invoked, the kernel runs it as root,
    but `getuid()` still returns the *real* user ID (the caller).
-2. It reads `/etc/doit.conf` and checks whether the real user is permitted.
-3. Depending on the permit mode:
+2. If `/etc/doit.conf` does not exist, `doit` creates it with a default entry
+   for the calling user (`<user> permit`) and sets mode `600`.
+3. It reads `/etc/doit.conf` and checks whether the real user is permitted.
+4. Depending on the permit mode:
    - **bare `permit`** — prompts for the password every time.
    - **`nopass`** — proceeds immediately.
    - **`extend`** — reads a persistent counter (`/var/lib/doit/counter.json`).
      If the counter is positive it decrements and allows nopass. If zero, it
      prompts for the user's password (verified against `/etc/shadow`) and
      resets the counter to 10.
-4. Once authorized, it calls `exec()` on the requested command, replacing the
+5. Once authorized, it calls `exec()` on the requested command, replacing the
    `doit` process with the command running as root.
 
 ## Security notes
 
 - The binary **must** be owned by `root` and have the setuid bit set.
-- The config file `/etc/doit.conf` should be owned by `root:root` with mode
-  `644` or `600`.
+- The config file `/etc/doit.conf` must be owned by `root:root` with mode `600`.
+  `doit` enforces this at runtime — world-readable or group-writable configs
+  are rejected.
 - The counter directory `/var/lib/doit` should be owned by `root:root` with
   mode `700` to prevent other users from tampering with usage counts.
-- Password verification uses the `sha-crypt` Rust crate and compares hashes
-  using the same SHA-512-crypt algorithm that glibc uses. Only `$6$` (SHA-512)
-  hashes are supported.
+- The environment is sanitised before executing the command: `LD_PRELOAD`,
+  `LD_LIBRARY_PATH`, and other dangerous variables are stripped, and `PATH` is
+  forced to `/usr/local/bin:/usr/bin:/bin`.
+- Every authorisation attempt is logged to syslog under `LOG_AUTH`.
+- Password verification supports yescrypt (`$y$`, used by modern distros) and
+  SHA-512 crypt (`$6$`).
